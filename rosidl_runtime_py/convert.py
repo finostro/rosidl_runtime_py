@@ -69,7 +69,9 @@ def message_to_yaml(
     truncate_length: int = None,
     no_arr: bool = False,
     no_str: bool = False,
-    flow_style: bool = False
+    flow_style: bool = False,
+    print_constants: bool = True,
+    
 ) -> str:
     """
     Convert a ROS message to a YAML string.
@@ -79,6 +81,7 @@ def message_to_yaml(
         This does not truncate the list of message fields.
     :param no_arr: Exclude array fields of the message.
     :param no_str: Exclude string fields of the message.
+    :param flow_style: Whether to use block style or flow style; defaults to block style.
     :returns: A YAML string representation of the input ROS message.
     """
     global __yaml_representer_registered
@@ -90,7 +93,7 @@ def message_to_yaml(
 
     return yaml.dump(
         message_to_ordereddict(
-            msg, truncate_length=truncate_length, no_arr=no_arr, no_str=no_str),
+            msg, truncate_length=truncate_length, no_arr=no_arr, no_str=no_str, print_constants=print_constants),
         allow_unicode=True, width=sys.maxsize, default_flow_style=flow_style,
     )
 
@@ -160,7 +163,8 @@ def message_to_ordereddict(
     *,
     truncate_length: int = None,
     no_arr: bool = False,
-    no_str: bool = False
+    no_str: bool = False,
+    print_constants: bool = False
 ) -> OrderedDict:
     """
     Convert a ROS message to an OrderedDict.
@@ -179,9 +183,16 @@ def message_to_ordereddict(
     for field_name, field_type in zip(msg.__slots__, msg.SLOT_TYPES):
         value = getattr(msg, field_name, None)
 
-        value = _convert_value(
-            value, field_type=field_type,
-            truncate_length=truncate_length, no_arr=no_arr, no_str=no_str)
+        if print_constants :
+
+            constants = getattr(msg.__class__, '_Metaclass_'+msg.__class__.__name__+'__constants')
+            value = _convert_value(
+                value, field_type=field_type,
+                truncate_length=truncate_length, no_arr=no_arr, no_str=no_str, constants=constants)
+        else:
+            value = _convert_value(
+                value, field_type=field_type,
+                truncate_length=truncate_length, no_arr=no_arr, no_str=no_str)
         # Remove leading underscore from field name
         d[field_name[1:]] = value
     return d
@@ -193,7 +204,8 @@ def _convert_value(
     field_type=None,
     truncate_length=None,
     no_arr=False,
-    no_str=False
+    no_str=False,
+    constants=None
 ):
 
     if isinstance(value, bytes):
@@ -217,26 +229,30 @@ def _convert_value(
             # Truncate every item in the sequence
             value = typename(
                 [_convert_value(v, truncate_length=truncate_length,
-                                no_arr=no_arr, no_str=no_str) for v in value] + ['...'])
+                                no_arr=no_arr, no_str=no_str, constants=constants) for v in value] + ['...'])
         else:
             # Truncate every item in the list
             value = typename(
                 [_convert_value(v, truncate_length=truncate_length,
-                                no_arr=no_arr, no_str=no_str) for v in value])
+                                no_arr=no_arr, no_str=no_str, constants=constants) for v in value])
     elif isinstance(value, dict) or isinstance(value, OrderedDict):
         # Convert each key and value in the mapping
         new_value = {} if isinstance(value, dict) else OrderedDict()
         for k, v in value.items():
             # Don't truncate keys because that could result in key collisions and data loss
             new_value[_convert_value(k)] = _convert_value(
-                v, truncate_length=truncate_length, no_arr=no_arr, no_str=no_str)
+                v, truncate_length=truncate_length, no_arr=no_arr, no_str=no_str, constants=constants)
         value = new_value
     elif isinstance(value, numpy.number):
         value = value.item()
     elif not isinstance(value, (bool, float, int)):
         # Assuming value is a message since it is neither a collection nor a primitive type
         value = message_to_ordereddict(
-            value, truncate_length=truncate_length, no_arr=no_arr, no_str=no_str)
+            value, truncate_length=truncate_length, no_arr=no_arr, no_str=no_str, print_constants=constants is not None)
+    elif constants is not None :
+        matches = [key for key, v in constants.items() if type(v) == type(value) and v == value]
+        if len(matches) > 0 :
+            value = str(value)+'           (' +' , '.join( matches)+')'
     return value
 
 
